@@ -31,6 +31,7 @@ local PAIRS=(BOT_COUNT+1)//2        -- eight claim groups on the shared farm lis
 local PNB_STAND={[1]={x=3,y=1},[2]={x=7,y=1}}                   -- yours
 local PNB_OFFSETS={{dx=-2,dy=-1},{dx=-1,dy=-1},{dx=0,dy=-1},{dx=1,dy=-1},{dx=2,dy=-1}} -- the five tiles of the chicken layout
 local STORAGE={world="YOUR_STORAGE",door="YOUR_STORAGE_DOOR",start_x=2,end_x=98,start_y=21,min_y=1} -- yours
+local WARP_RETRY_MIN_MS=10000 -- minimum interval between warp requests
 local MAX_STACKS=20               -- chicken max_drop_stacks: a tile with this many stacks is full
 local MAX_ITEMS=3800              -- chicken max_drop_items
 -- Indexes of bot:getInterval, in the order of the Lucifer panel as you listed it (move, collect, hit, place, harvest, plant, warp, drop, trash)
@@ -261,13 +262,29 @@ local function nativeList(raw)
  for i=base,base+n-1 do local good,value=pcall(function()return raw[i]end);if not good or value==nil then return nil end;out[#out+1]=value end
  return out
 end
--- After each warp: online + named world other than EXIT, then continue.
--- White-door arrival with a configured ID retries that same world/door.
+-- One per-bot gate shared by farm, storage, return and recovery entry calls.
+local warpState={next_at=0}
+local function requestWarp(world,door)
+ if bot.status~=BotStatus.online or idleDisconnected then return false end
+ local hasDoor=door~=nil and door~=""
+ if readyForActions() and bot:isInWorld(world) and not (hasDoor and onWhiteDoor()) then return false end
+ if os.time()<warpState.next_at then return false end
+ -- Set the cooldown before sending, including when the native call fails.
+ warpState.next_at=os.time()+math.ceil(math.max(WARP_RETRY_MIN_MS or 10000,nativeMs("warp"))/1000)
+ if STORAGE and world==STORAGE.world then setCollect(false) end
+ if hasDoor and onWhiteDoor() then say("white door: rejoining "..world.."|"..door)
+ else say("joining "..world.." from "..tostring(worldName())) end
+ -- Final online check at the sole native warp call site.
+ if bot.status~=BotStatus.online or idleDisconnected then return false end
+ if hasDoor then bot:warp(world,door) else bot:warp(world) end
+ return true
+end
+-- Check state after a warp; do not require a fixed sleep after successful arrival.
 function enter(world,door)
  world=world:upper();expect={world=world,door=door}
  local hasDoor=door~=nil and door~=""
  if blocked[world] then return false end
- local attempted=false;local nextWarp=0;local nextConnect=0
+ local nextConnect=0
  if idleDisconnected then
   idleDisconnected=false;bot.auto_reconnect=workAutoReconnect
   if bot.status==BotStatus.offline then bot:connect();nextConnect=os.time()+15 end
@@ -279,14 +296,9 @@ function enter(world,door)
    if bot.status==BotStatus.offline and not bot.auto_reconnect and os.time()>=nextConnect then
     bot:connect();nextConnect=os.time()+15
    end
-  elseif not attempted or os.time()>=nextWarp then
-   if hasDoor and onWhiteDoor() then say("white door: rejoining "..world.."|"..door)
-   else say("joining "..world.." from "..tostring(worldName())) end
-   if hasDoor then bot:warp(world,door) else bot:warp(world) end
-   attempted=true;nextWarp=os.time()+math.max(1,math.ceil(nativeMs("warp")/1000))
-  end
-  eventWait(1) -- poll state, not a fixed loading/settling delay
-  if attempted and readyForActions() and bot:isInWorld(world) and not (hasDoor and onWhiteDoor()) then
+  else requestWarp(world,door) end
+  eventWait(1)
+  if readyForActions() and bot:isInWorld(world) and not (hasDoor and onWhiteDoor()) then
    entryTiles[world]=entryTiles[world] or {}
    entryTiles[world][bot.x..":"..bot.y]={x=bot.x,y=bot.y}
    say("joined "..tostring(worldName())..": online, not EXIT; continuing")

@@ -82,3 +82,8 @@ Queue-end cleanup clarification: finishing one farm no longer forces an inventor
 
 
 Seed-only cleanup correction: storage sends ONLY the configured Toilet Seed (107). Unrelated inventory items are left alone; earlier all-item-cleanup text is superseded. Normal threshold trips and queue-end leftover deposits both follow this rule. The bot waits its native drop interval after facing right, revalidates world/position/capacity, and sends one drop. It then waits for an inventory decrease observed online in storage, without advancing to another tile or resending an uncertain drop. Full targets detected before sending are skipped normally. An unresolved receipt is logged as pending, not misclassified as a full tile or successful storage; it can remain pending if the server never acknowledges the drop. `tests/drop_receipt.lua` covers delayed receipt, false zero inventory in EXIT, settled facing and single-send behavior.
+
+
+## Warp audit
+
+Farm entry, storage entry, farm return and guard recovery all use `enter()`. Every native warp is now inside one `requestWarp()` gate. It checks online status at the send site, refuses idle/offline/transitional sends, avoids warping when already correctly inside the target and off the white door, and shares one per-bot cooldown across all destinations and entry calls. The minimum gap is `max(WARP_RETRY_MIN_MS, native warp interval)`, default floor 10 seconds. This limits repeated sends; it is not a mandatory post-arrival sleep. White-door recovery retains world plus door ID and follows the same gate. Other native automation or another script controlling that account is outside this script's gate. `tests/warp_gate.lua` exercises these paths.

@@ -1,7 +1,7 @@
 local root=MASSING_ROOT or "lua"
 local f=assert(io.open(root.."/HARVEST_PNB.lua","rb"));local s=f:read("*a");f:close()
 local a=assert(s:find("local function objectTile",1,true));local b=assert(s:find("-- ---------- harvest",a,true))
-local c=assert(s:find("function enter(world,door)",1,true));local d=assert(s:find("local function walkTo",c,true))
+local c=assert(s:find("local warpState=",1,true));local d=assert(s:find("local function walkTo",c,true))
 local fixture=[=[
 local time=0;local os={time=function()return time end};local idleDisconnected=false;local idleDisconnectAt=0;local workAutoReconnect=true;local maintainIdle;local expect={world="FARM01"};local entryTiles={};local blocked={}
 local BotStatus={online=1,offline=0};local bot={status=1,world="FARM01",auto_reconnect=true,x=7,y=1};local inventory={[107]=1,[999]=2};local drops={};local connects=0;local disconnects=0;local events={}
