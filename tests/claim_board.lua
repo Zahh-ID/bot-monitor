@@ -11,6 +11,7 @@ function other:getWorld()return {name="FARM03"}end
 local function getBots()return {bot,follower,other}end
 local function say()end
 local function leaveAndIdle()assert(bot.status==0)end
+local function leaveCurrentWorld()end
 local function eventWait()tick=tick+1;if tick==3 then follower.custom_status="DONE|1|FARM02|seed=107|cleared=FARM02"end end
 ]=]
 local checks=[=[

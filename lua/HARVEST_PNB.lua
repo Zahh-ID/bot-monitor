@@ -436,19 +436,22 @@ maintainIdle=function()
   bot:disconnect();idleDisconnectAt=os.time()+5
  end
 end
-local function leaveAndIdle(cleanupInventory)
- if idleDisconnected then maintainIdle();return end
- -- Never disconnect with leftover inventory, including a single seed.
- if cleanupInventory and firstInventoryItem() then storeSeeds(telemetry.farm or worldName() or "EXIT",true) end
- setCollect(false);bot.auto_reconnect=false;expect=nil
+local function leaveCurrentWorld()
+ setCollect(false);expect=nil
  local nextLeave=0
  while bot.status==BotStatus.online and worldName() and worldName()~="EXIT" do
   if os.time()>=nextLeave then bot:leaveWorld();nextLeave=os.time()+5 end
   eventWait(1)
  end
+end
+local function leaveAndIdle(cleanupInventory)
+ if idleDisconnected then maintainIdle();return end
+ if cleanupInventory and firstInventoryItem() then storeSeeds(telemetry.farm or worldName() or "EXIT",true) end
+ bot.auto_reconnect=false
+ leaveCurrentWorld()
  idleDisconnected=true;maintainIdle()
  telemetry.phase="idle";telemetry.farm=nil
- say(cleanupInventory and "inventory empty; left world and disconnected until assigned" or "unassigned; left world and disconnected until assigned")
+ say(cleanupInventory and "inventory empty; no assignment available; disconnected" or "unassigned; disconnected until assigned")
  if publishStats then publishStats() end
 end
 
@@ -596,14 +599,13 @@ local function farmWorld(world)
  local finalReady,finalTotal=treesToDo()
  local finalObserved=os.time()
  setCollect(false)
- if firstInventoryItem() then storeSeeds(world,true) end
  telemetry.scan={world=world,observed_at=finalObserved,trees=finalTotal,ready=#finalReady,finished=true}
  telemetry.scans[world]=telemetry.scan
  lastTreeTotal=finalTotal
- telemetry.counters.worlds_completed=telemetry.counters.worlds_completed+1;telemetry.phase="waiting"
+ telemetry.counters.worlds_completed=telemetry.counters.worlds_completed+1;telemetry.phase="waiting";telemetry.has_completed_job=true
  say(world..": finished ("..finalTotal.." trees standing, "..#finalReady.." ready)")
  if publishStats then publishStats("farm_finished") end
- leaveAndIdle(true)
+ leaveCurrentWorld()
 end
 
 -- ---------- claim board: one shared list, never more than one pair on a farm ----------
@@ -675,7 +677,6 @@ local function worldCleared(world)
 end
 local cursor=1
 local function leaderPick()
- leaveAndIdle()
  telemetry.phase="claiming"
  local warned=false
  while true do
@@ -692,6 +693,8 @@ local function leaderPick()
     setStatus("") -- another pair took it at the same moment (and has the lower number, or is already in): choose again
    end
   end
+  setStatus("WAIT|"..pair.."|EXIT")
+  leaveAndIdle(telemetry.has_completed_job==true)
   telemetry.phase=availableWork and "waiting_for_world" or "all_farms_done"
   if not warned then
    warned=true;say(availableWork and "no free world: waiting disconnected" or "all farm worlds cleared; staying disconnected until next run")
@@ -701,22 +704,26 @@ local function leaderPick()
 end
 local lastDone=nil
 local function followerWait()
- leaveAndIdle()
+ leaveCurrentWorld()
+ if not telemetry.has_completed_job then leaveAndIdle(false) end
  telemetry.phase="waiting_for_leader"
- local leader=botByIndex(bot.index-1)
  local warned=false
  while true do
+  local leader=botByIndex(bot.index-1)
   if leader then
    local kind,p,w=parseStatus(statusOf(leader))
    if kind=="CLAIM" and p==pair and w~=lastDone then return w end
+   -- Only an explicit no-assignment decision triggers final storage.
+   -- Do not drain between DONE and the leader's next CLAIM.
+   if kind=="WAIT" and p==pair then leaveAndIdle(telemetry.has_completed_job==true) end
   end
-  if not warned then warned=true;say("waiting for the leader's claim") end
+  if not warned then warned=true;say("waiting for the leader's next assignment") end
   eventWait(1)
  end
 end
 local function waitFollowerDone(world)
  if bot.index+1>BOT_COUNT then return end
- leaveAndIdle();telemetry.phase="waiting_for_partner"
+ leaveCurrentWorld();telemetry.phase="waiting_for_partner"
  -- A follower being offline is normal idle behavior, not a DONE acknowledgement.
  while true do
   local follower=botByIndex(bot.index+1)

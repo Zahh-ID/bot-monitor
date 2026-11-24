@@ -76,3 +76,6 @@ Every bot's first scan of a world in a run logs and emits `first_world_scan`: ze
 `tests/idle_cleanup.lua` checks final one-seed/extra-item storage, leave-before-disconnect, no idle connects and assignment-only reconnect. `tests/claim_board.lua` checks shared cleared-world status and waiting for an actual follower acknowledgement.
 
 Startup correction: unassigned/startup waits leave and disconnect without a final inventory-drain trip. Starting inventory is preserved for the next assigned farm. All-item storage remains mandatory when completing an actual farm job. The idle cleanup test covers both paths.
+
+
+Queue-end cleanup clarification: finishing one farm no longer forces an inventory drain or disconnect. Bots leave that farm, retain sub-limit seeds (e.g. 44), and proceed to the next assignment. Normal SEED_LIMIT storage trips remain unchanged. Final all-item storage and disconnection occur only when the leader cannot claim a world. Leaders publish WAIT for that definite decision; followers do not mistake temporary IDLE or the previous CLAIM during handoff for queue completion. A follower receiving WAIT drains leftovers and goes offline. `tests/queue_cleanup.lua` covers this distinction. This clarification supersedes the earlier per-farm cleanup description.
