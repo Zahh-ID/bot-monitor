@@ -1,0 +1,1 @@
+import './globals.css';export const metadata={title:'Farm Monitor',description:'Live farm, bot and storage statistics'};export default function Layout({children}){return <html lang="en"><body>{children}</body></html>;}
