@@ -63,3 +63,14 @@ Reload the updated Lua file. A successful curl report logs `[FarmStats] HTTP 200
 Each farm shows capacity 2,645 and harvest progress `(2645 - standing target trees) / 2645`, clamped to 0..100%. This is cleared capacity, not a count of server-confirmed harvest actions. Zero standing target trees shows Harvest done; PNB/storage may still be running. A script pass finishing with trees remaining never forces the percentage to 100%. The Lua sender does a final full scan and emits `farm_finished` once when its farm pass finishes. Existing scans also receive progress calculations without waiting for a new Lua version.
 
 Stale bot rows are omitted from the live API list and dashboard. Their stored reports/history and the latest farm/storage observations remain retained. A new report brings a bot back automatically. This hides stale reports; it does not delete database history or remove game accounts.
+
+
+## Finished and unassigned bots
+
+Finished bots perform final inventory cleanup before marking their job finished: remaining farm blocks are processed by the existing PNB loop, and final storage deposits every remaining carried inventory item, including singleton seeds. This final storage visit does not unnecessarily warp back to the farm. Gems are a separate balance, not droppable inventory items. If an item cannot be deposited, cleanup stays pending rather than falsely declaring an empty inventory.
+
+After cleanup the bot leaves the world, disables auto-reconnect and disconnects. Waiting for a leader, partner or free farm does not connect the account. A real new assignment clears idle state and initiates connection once; normal connection recovery then applies. A leader keeps its claim until the follower reports DONE, even if that follower is still offline waiting to begin. Idle/offline cached world names no longer block other pairs.
+
+Every bot's first scan of a world in a run logs and emits `first_world_scan`: zero target trees means Harvest done; otherwise work remains. This is not an initial census of all worlds before farming: each pair claims, scans and processes its world before taking the next one. Cleared farm names are shared in the existing custom-status claim board, scoped by seed ID, so pairs skip cleared worlds for the rest of the run. Once all farms are cleared, bots stay disconnected. Restart all bot scripts for a new planted run to reset this in-memory cleared-world registry. No additional files or network service are used for the claim board.
+
+`tests/idle_cleanup.lua` checks final one-seed/extra-item storage, leave-before-disconnect, no idle connects and assignment-only reconnect. `tests/claim_board.lua` checks shared cleared-world status and waiting for an actual follower acknowledgement.

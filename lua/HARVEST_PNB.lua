@@ -47,11 +47,15 @@ for _,k in ipairs({"harvest","place","hit","move","drop","warp"}) do assert(type
 local STAND=PNB_STAND[part]
 
 local monitorFarms={};for _,world in ipairs(FARMS) do monitorFarms[world]=true end
-local telemetry={phase="waiting",scans={},counters={harvest_attempts=0,blocks_placed=0,pnb_hits=0,seeds_deposited=0,worlds_completed=0}}
-local publishStats,observeStorage
+local telemetry={phase="waiting",scans={},first_scans={},counters={harvest_attempts=0,blocks_placed=0,pnb_hits=0,seeds_deposited=0,worlds_completed=0}}
+local publishStats,observeStorage,maintainIdle
+local idleDisconnected=false
+local idleDisconnectAt=0
+local workAutoReconnect=bot.auto_reconnect
 local nativeListenEvents=listenEvents
 local function eventWait(seconds)
  nativeListenEvents(seconds)
+ if maintainIdle then maintainIdle() end
  if publishStats then publishStats() end
 end
 local function say(text)
@@ -177,7 +181,7 @@ publishStats=function(reason)
  if not MONITOR.enabled or MONITOR.url=="" or MONITOR.token=="" or telemetry.suppress then return end
  local signature=telemetry.phase..":"..tostring(telemetry.farm)..":"..tostring(bot.status)..":"..tostring(worldName())
  local heartbeat=MONITOR.heartbeat_seconds or 300
- if not storagePending and signature==lastSignature and (heartbeat<=0 or os.time()<nextHeartbeat) then return end
+ if not storagePending and reason~="first_world_scan" and reason~="farm_finished" and signature==lastSignature and (heartbeat<=0 or os.time()<nextHeartbeat) then return end
  local ok,err=pcall(function()
   if not sender then
    local encoded=base64(senderCode)
@@ -263,8 +267,12 @@ function enter(world,door)
  world=world:upper();expect={world=world,door=door}
  local hasDoor=door~=nil and door~=""
  if blocked[world] then return false end
- if readyForActions() and bot:isInWorld(world) and not (hasDoor and onWhiteDoor()) then return true end
  local attempted=false;local nextWarp=0;local nextConnect=0
+ if idleDisconnected then
+  idleDisconnected=false;bot.auto_reconnect=workAutoReconnect
+  if bot.status==BotStatus.offline then bot:connect();nextConnect=os.time()+15 end
+ end
+ if readyForActions() and bot:isInWorld(world) and not (hasDoor and onWhiteDoor()) then return true end
  while true do
   if blocked[world] then return false end
   if bot.status~=BotStatus.online then
@@ -333,9 +341,15 @@ local function validDropSite(x,y)
  end end
  return true
 end
-local function dropSeedAt(x,y)
+local function firstInventoryItem()
+ for _,item in ipairs(assert(nativeList(bot:getInventory():getItems()),"inventory list unavailable")) do
+  if item.id>0 and item.count>0 then return item.id end
+ end
+end
+local function dropSeedAt(x,y,itemId)
+ local id=itemId or SEED_ID
  if not validDropSite(x,y) then return false end
- while count(SEED_ID)>0 do
+ while count(id)>0 do
   guard()
   if not walkTo(x-1,y) then return false end
   nap(nativeMs("drop"))
@@ -347,12 +361,12 @@ local function dropSeedAt(x,y)
     if ox==x and oy==y then stacks=stacks+1;total=total+(o.count or 1) end
    end
    if not target or target.fg~=0 or stacks>=MAX_STACKS or total>=MAX_ITEMS then return false end
-   local before=count(SEED_ID);local amount=math.min(before,MAX_ITEMS-total)
+   local before=count(id);local amount=math.min(before,MAX_ITEMS-total)
    if amount<=0 then return false end
    setCollect(false);bot:setDirection(false)
    -- No yield between final world/position validation and sending the drop.
    if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and bot:isInTile(x-1,y) and bot.x==x-1 and bot.y==y and validDropSite(x,y) then
-    bot:drop(SEED_ID,amount)
+    bot:drop(id,amount)
     return true,before
    end
   end
@@ -360,7 +374,7 @@ local function dropSeedAt(x,y)
  end
  return false
 end
-local function storeSeeds(farmWorld)
+local function storeSeeds(farmWorld,finishOnly)
  telemetry.phase="storing";telemetry.farm=farmWorld;telemetry.suppress=true
  say("seeds: "..count(SEED_ID).." carried, going to storage "..STORAGE.world)
  setCollect(false) -- native collect off BEFORE joining: on arrival it would pick the seeds already lying in storage up again
@@ -371,8 +385,11 @@ local function storeSeeds(farmWorld)
  local size=width*(STORAGE.start_y-STORAGE.min_y+1)
  local startAt=1 -- every bot starts at STORAGE.start_x, STORAGE.start_y
  local lastReported=""
- while count(SEED_ID)>0 do
+ while true do
   guard()
+  local itemId
+  if finishOnly then itemId=firstInventoryItem() elseif count(SEED_ID)>0 then itemId=SEED_ID end
+  if not itemId then break end
   -- what lies on each tile NOW (read again before every drop; the other bot drops here too)
   local used={}
   for _,o in ipairs(assert(nativeList(bot:getWorld():getObjects()),"dropped object list unavailable")) do
@@ -388,10 +405,10 @@ local function storeSeeds(farmWorld)
    local occ=used[x..":"..y] or {stacks=0,total=0}
    local t=tileAt(x,y)
    if t and validDropSite(x,y) and occ.stacks<MAX_STACKS and occ.total<MAX_ITEMS then
-    local sent,before=dropSeedAt(x,y)
+    local sent,before=dropSeedAt(x,y,itemId)
     if sent then
      nap(nativeMs("drop"))
-     if count(SEED_ID)<before then telemetry.counters.seeds_deposited=telemetry.counters.seeds_deposited+(before-count(SEED_ID));dropped=true;startAt=idx;break end
+     if count(itemId)<before then if itemId==SEED_ID then telemetry.counters.seeds_deposited=telemetry.counters.seeds_deposited+(before-count(itemId)) end;dropped=true;startAt=idx;break end
     end
    end
   end
@@ -403,9 +420,36 @@ local function storeSeeds(farmWorld)
  observeStorage()
  telemetry.phase="storage_complete";telemetry.suppress=false
  if publishStats then publishStats("storage_complete") end
- say("seeds dropped; back to "..farmWorld)
- enter(farmWorld,FARM_DOOR)
- setCollect(true)
+ if finishOnly then
+  say("final storage complete: no carried inventory items")
+ else
+  say("seeds dropped; back to "..farmWorld)
+  enter(farmWorld,FARM_DOOR)
+  setCollect(true)
+ end
+end
+
+maintainIdle=function()
+ if not idleDisconnected then return end
+ bot.auto_reconnect=false
+ if bot.status~=BotStatus.offline and os.time()>=idleDisconnectAt then
+  bot:disconnect();idleDisconnectAt=os.time()+5
+ end
+end
+local function leaveAndIdle()
+ if idleDisconnected then maintainIdle();return end
+ -- Never disconnect with leftover inventory, including a single seed.
+ if firstInventoryItem() then storeSeeds(telemetry.farm or worldName() or "EXIT",true) end
+ setCollect(false);bot.auto_reconnect=false;expect=nil
+ local nextLeave=0
+ while bot.status==BotStatus.online and worldName() and worldName()~="EXIT" do
+  if os.time()>=nextLeave then bot:leaveWorld();nextLeave=os.time()+5 end
+  eventWait(1)
+ end
+ idleDisconnected=true;maintainIdle()
+ telemetry.phase="idle";telemetry.farm=nil
+ say("inventory empty; left world and disconnected until assigned")
+ if publishStats then publishStats() end
 end
 
 -- ---------- harvest ----------
@@ -457,7 +501,12 @@ local function harvestPass()
  local list,total=treesToDo()
  telemetry.scan={world=worldName(),observed_at=os.time(),trees=total,ready=#list}
  telemetry.scans[telemetry.scan.world]=telemetry.scan
- if publishStats then publishStats() end
+ local firstScan=not telemetry.first_scans[telemetry.scan.world]
+ telemetry.first_scans[telemetry.scan.world]=true
+ if firstScan then
+  say(telemetry.scan.world..": first scan — "..total.." trees, "..#list.." ready"..(total==0 and "; HARVEST DONE" or "; work remaining"))
+ end
+ if publishStats then publishStats(firstScan and "first_world_scan" or nil) end
  say("scan complete: "..total.." trees, "..#list.." ready; starting harvest")
  local hit,noRoute,gone=0,0,0
  local function report() say(string.format("pass: %d tree(s) in the world, %d ready, hit %d, no route %d, already taken/not ready on arrival %d",total,#list,hit,noRoute,gone)) end
@@ -526,7 +575,7 @@ end
 local lastTreeTotal=nil
 local function farmWorld(world)
  telemetry.farm=world;telemetry.phase="joining"
- if not enter(world,FARM_DOOR) then say(world..": refused, skipped");return end
+ if not enter(world,FARM_DOOR) then say(world..": refused, skipped");leaveAndIdle();return end
  setCollect(true) -- native collect on in the farm
  say(world..": start, part "..part.." of "..PARTS)
  while true do
@@ -545,12 +594,16 @@ local function farmWorld(world)
   if readyCount==0 and count(BLOCK_ID)==0 then break end -- nothing ready, no block left: this world is finished
  end
  local finalReady,finalTotal=treesToDo()
- telemetry.scan={world=world,observed_at=os.time(),trees=finalTotal,ready=#finalReady,finished=true}
+ local finalObserved=os.time()
+ setCollect(false)
+ if firstInventoryItem() then storeSeeds(world,true) end
+ telemetry.scan={world=world,observed_at=finalObserved,trees=finalTotal,ready=#finalReady,finished=true}
  telemetry.scans[world]=telemetry.scan
  lastTreeTotal=finalTotal
  telemetry.counters.worlds_completed=telemetry.counters.worlds_completed+1;telemetry.phase="waiting"
  say(world..": finished ("..finalTotal.." trees standing, "..#finalReady.." ready)")
  if publishStats then publishStats("farm_finished") end
+ leaveAndIdle()
 end
 
 -- ---------- claim board: one shared list, never more than one pair on a farm ----------
@@ -574,13 +627,18 @@ local function allBots()
 end
 local function statusOf(b) local ok,s=pcall(function() return b.custom_status end);return (ok and type(s)=="string") and s or "" end
 local function indexOf(b) local ok,i=pcall(function() return b.index end);return ok and i or nil end
-local function worldOfBot(b) local ok,n=pcall(function() return b:getWorld().name end);return (ok and type(n)=="string") and n:upper() or nil end
+local function worldOfBot(b) if b.status~=BotStatus.online then return nil end;local ok,n=pcall(function() return b:getWorld().name end);return (ok and type(n)=="string") and n:upper() or nil end
 local function setStatus(text)
+ local cleared={}
+ for world,scan in pairs(telemetry.scans) do if scan.finished and scan.trees==0 then cleared[#cleared+1]=world end end
+ table.sort(cleared)
+ if text=="" then text="IDLE|"..pair.."|EXIT" end
+ text=text.."|seed="..SEED_ID.."|cleared="..table.concat(cleared,",")
  local ok,err=pcall(function() bot.custom_status=text end)
  if not ok then say("custom_status could not be set: "..tostring(err)) end
 end
 local function botByIndex(i) for _,b in ipairs(allBots()) do if indexOf(b)==i then return b end end end
-local function parseStatus(s) local kind,p,w=s:match("^(%u+)|(%d+)|(%w+)$");if kind then return kind,tonumber(p),w:upper() end end
+local function parseStatus(s) local kind,p,w=s:match("^(%u+)|(%d+)|(%w+)");if kind then return kind,tonumber(p),w:upper() end end
 -- is `world` free for pair `me`? claimed by another pair, or another pair's bot standing in it, means no
 local function freeFor(world)
  for _,b in ipairs(allBots()) do
@@ -603,27 +661,47 @@ local function claimedByLowerPair(world)
  end
  return false
 end
+local function worldCleared(world)
+ local own=telemetry.scans[world]
+ if own and own.finished and own.trees==0 then return true end
+ for _,b in ipairs(allBots()) do
+  local board=statusOf(b)
+  if tonumber(board:match("|seed=(%d+)"))==SEED_ID then
+   local cleared=board:match("|cleared=([A-Z0-9,]*)")
+   for name in (cleared or ""):gmatch("[A-Z0-9]+") do if name==world then return true end end
+  end
+ end
+ return false
+end
 local cursor=1
 local function leaderPick()
+ leaveAndIdle()
  telemetry.phase="claiming"
  local warned=false
  while true do
+  local availableWork=false
   for k=0,#FARMS-1 do
    local idx=(cursor-1+k)%#FARMS+1
    local w=FARMS[idx]:upper()
-   if not blocked[w] and freeFor(w) then
+   local notDone=not blocked[w] and not worldCleared(w)
+   if notDone then availableWork=true end
+   if notDone and freeFor(w) then
     setStatus("CLAIM|"..pair.."|"..w)
     eventWait(1) -- let the other leaders' claims and mine settle, then read the board again
     if freeFor(w) and not claimedByLowerPair(w) then cursor=idx%#FARMS+1;return w end
     setStatus("") -- another pair took it at the same moment (and has the lower number, or is already in): choose again
    end
   end
-  if not warned then warned=true;say("no free world on the list: waiting") end
+  telemetry.phase=availableWork and "waiting_for_world" or "all_farms_done"
+  if not warned then
+   warned=true;say(availableWork and "no free world: waiting disconnected" or "all farm worlds cleared; staying disconnected until next run")
+  end
   eventWait(1)
  end
 end
 local lastDone=nil
 local function followerWait()
+ leaveAndIdle()
  telemetry.phase="waiting_for_leader"
  local leader=botByIndex(bot.index-1)
  local warned=false
@@ -637,15 +715,19 @@ local function followerWait()
  end
 end
 local function waitFollowerDone(world)
- if bot.index+1>BOT_COUNT then return end -- final odd bot works solo; never wait for Bot 16
- local follower=botByIndex(bot.index+1)
- while follower do
-  local kind,p,w=parseStatus(statusOf(follower))
-  if kind=="DONE" and p==pair and w==world then break end
-  if worldOfBot(follower)~=world and kind~="DONE" then break end -- the follower is not in this world (offline, elsewhere): do not wait for it
+ if bot.index+1>BOT_COUNT then return end
+ leaveAndIdle();telemetry.phase="waiting_for_partner"
+ -- A follower being offline is normal idle behavior, not a DONE acknowledgement.
+ while true do
+  local follower=botByIndex(bot.index+1)
+  if follower then
+   local kind,p,w=parseStatus(statusOf(follower))
+   if kind=="DONE" and p==pair and w==world then return end
+  end
   eventWait(1)
  end
 end
+
 if MONITOR.enabled and MONITOR.url~="" and MONITOR.token~="" then
  say("[FarmStats] telemetry enabled; sending action changes")
 else
