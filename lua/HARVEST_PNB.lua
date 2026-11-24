@@ -10,7 +10,7 @@
 --   4. the world is finished when nothing ready is left AND no block is left; then the next world (and round and round the list).
 -- No replanting. Optional embedded PowerShell webhook sends stats; logs remain in bot:getLog().
 -- Storage: the grid is SHARED by both bots; each bot reads the dropped objects itself, every time, to see what a tile holds (stacks / items),
--- uses a tile only below the limits, and starts its search at a different place by its part so the two do not begin on the same tile.
+-- uses a tile only below the limits. Every bot starts at (2,21), scans right, then the row above.
 -- Delays: harvest, place, hit and move come from THIS bot's own native intervals: bot:getInterval(index), read every time they are used (seconds
 -- in the log of the interval probe). Which index is which is NOT documented: run INTERVAL_MAP_PROBE.lua, change one delay at a time in the
 -- Lucifer panel, see which index moves, and fill INTERVAL_INDEX below. The other delays are the ones of your chicken script.
@@ -149,6 +149,7 @@ end
 
 -- After action delays, recover the expected world. With a configured door ID, white-door arrival must rewarp using that ID.
 local expect=nil
+local entryTiles={}
 local rejoins=0
 local enter
 local function onWhiteDoor() local t=tileAt(bot.x,bot.y);return t~=nil and t.fg==6 end
@@ -213,6 +214,8 @@ function enter(world,door)
   end
   eventWait(1) -- poll state, not a fixed loading/settling delay
   if attempted and readyForActions() and bot:isInWorld(world) and not (hasDoor and onWhiteDoor()) then
+   entryTiles[world]=entryTiles[world] or {}
+   entryTiles[world][bot.x..":"..bot.y]={x=bot.x,y=bot.y}
    say("joined "..tostring(worldName())..": online, not EXIT; continuing")
    return true
   end
@@ -248,13 +251,31 @@ observeStorage=function()
  end
  telemetry.storage={world=STORAGE.world,observed_at=os.time(),items=stock,stacks=stacks}
 end
+local function validDropSite(x,y)
+ local target,stand=tileAt(x,y),tileAt(x-1,y)
+ if not target or not stand or target.fg~=0 or stand.fg~=0 then return false end
+ for _,entry in pairs(entryTiles[STORAGE.world] or {}) do
+  if math.abs(y-entry.y)<=1 and (math.abs(x-entry.x)<=1 or math.abs(x-1-entry.x)<=1) then return false end
+ end
+ -- Protect doors/portals near both the standing position and drop target.
+ for yy=y-1,y+1 do for xx=x-2,x+1 do
+  local t=tileAt(xx,yy)
+  if t and t.fg~=0 then
+   if t.fg==6 then return false end
+   local ok,name=pcall(function()return getInfo(t.fg).name:lower()end)
+   if ok and (name:find("door",1,true) or name:find("portal",1,true) or name:find("entrance",1,true)) then return false end
+  end
+ end end
+ return true
+end
 local function dropSeedAt(x,y)
+ if not validDropSite(x,y) then return false end
  while count(SEED_ID)>0 do
   guard()
   if not walkTo(x-1,y) then return false end
   nap(nativeMs("drop"))
   -- nap may reconnect/rejoin. Never trust the pre-delay position.
-  if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and bot:isInTile(x-1,y) then
+  if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and bot:isInTile(x-1,y) and bot.x==x-1 and bot.y==y and validDropSite(x,y) then
    local target=tileAt(x,y);local stacks,total=0,0
    for _,o in ipairs(assert(nativeList(bot:getWorld():getObjects()),"dropped object list unavailable")) do
     local ox,oy=objectTile(o)
@@ -265,7 +286,7 @@ local function dropSeedAt(x,y)
    if amount<=0 then return false end
    setCollect(false);bot:setDirection(false)
    -- No yield between final world/position validation and sending the drop.
-   if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and bot:isInTile(x-1,y) then
+   if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and bot:isInTile(x-1,y) and bot.x==x-1 and bot.y==y and validDropSite(x,y) then
     bot:drop(SEED_ID,amount)
     return true,before
    end
@@ -283,7 +304,7 @@ local function storeSeeds(farmWorld)
  local last=math.min(STORAGE.end_x,w.x-1)
  local width=last-STORAGE.start_x+1
  local size=width*(STORAGE.start_y-STORAGE.min_y+1)
- local startAt=1+(part-1)*(size//PARTS) -- the two bots begin their search at different tiles of the same grid
+ local startAt=1 -- every bot starts at STORAGE.start_x, STORAGE.start_y
  local lastReported=""
  while count(SEED_ID)>0 do
   guard()
@@ -301,7 +322,7 @@ local function storeSeeds(farmWorld)
    local x=STORAGE.start_x+zero%width;local y=STORAGE.start_y-zero//width
    local occ=used[x..":"..y] or {stacks=0,total=0}
    local t=tileAt(x,y)
-   if t and t.fg==0 and occ.stacks<MAX_STACKS and occ.total<MAX_ITEMS then
+   if t and validDropSite(x,y) and occ.stacks<MAX_STACKS and occ.total<MAX_ITEMS then
     local sent,before=dropSeedAt(x,y)
     if sent then
      nap(nativeMs("drop"))
@@ -324,32 +345,34 @@ end
 
 -- ---------- harvest ----------
 local function treesToDo()
- local w=bot:getWorld()
- local list={}
- local total=0
- local snapshot
- local ok,raw=pcall(function()return w:getTilesSafe()end)
- if ok then snapshot=nativeList(raw) end
- if not snapshot or #snapshot==0 then
-  -- Do not silently treat a userdata iteration failure as an empty farm.
-  snapshot={}
-  for y=0,w.y-1 do for x=0,w.x-1 do
-   local t=w:getTile(x,y)
-   assert(t,"world tile data unavailable at "..x..","..y)
-   snapshot[#snapshot+1]=t
-  end end
- end
- do
-  for _,t in ipairs(snapshot) do
-   if t.fg==SEED_ID then -- the whole farm: the two bots of a pair RACE, whoever reaches a ready tree first harvests it
-    total=total+1
-    -- ready is read from the LIVE tile (getTile), like the chicken script does; getTilesSafe only gives copies, whose canHarvest may differ
-    local live=tileAt(t.x,t.y)
-    local ready=false
-    if live and live.fg==SEED_ID then pcall(function() ready=live:canHarvest()==true end) end
-    if ready then list[#list+1]={x=t.x,y=t.y} end
+ local list,total
+ while true do
+  guard()
+  local w=bot:getWorld();local width,height=w.x,w.y
+  local expectedWorld=worldName()
+  local complete=type(width)=="number" and type(height)=="number" and width>0 and height>0
+  list={};total=0
+  if complete then
+   for y=0,height-1 do
+    for x=0,width-1 do
+     local t=tileAt(x,y)
+     if not t then complete=false;break end
+     if t.fg==SEED_ID then
+      total=total+1
+      local ok,ready=pcall(function()return t:canHarvest()end)
+      if not ok then complete=false;break end
+      if ready then list[#list+1]={x=x,y=y} end
+     end
+    end
+    if not complete then break end
    end
   end
+  if complete and readyForActions() and worldName()==expectedWorld then
+   say("world scan: "..(width*height).."/"..(width*height).." tiles checked")
+   break
+  end
+  say("world scan incomplete; waiting for tile data before retrying")
+  eventWait(1)
  end
  table.sort(list,function(a,b) if a.y~=b.y then return a.y<b.y end return a.x<b.x end)
  local out,i,flip={},1,false

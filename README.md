@@ -43,3 +43,10 @@ Both endpoints require `Authorization: Bearer MONITOR_TOKEN`: `POST /api/ingest`
 ## Vercel scaffold
 
 Import this repository as the Vercel project root (the repository root), using the Next.js framework preset. Set MONGODB_URI, MONGODB_DB and MONITOR_TOKEN as server environment variables. The local vend environment is not available on Vercel. After deployment, set the Lua MONITOR.url to the public `/api/ingest` URL and use the same monitor token. A minimal vercel.json is included. No deployment or publishing has been performed. Actual event frequency, dashboard viewing time, CPU, memory and transfer determine free-plan usage; no unlimited/free guarantee is made.
+
+
+## Full-world scan and storage placement fixes
+
+Harvest reads every coordinate from `(0,0)` through `(world.x-1,world.y-1)` using live `getTile`, retries incomplete tile data, and logs the checked tile count. Nonempty but partial `getTilesSafe` snapshots are no longer trusted as the whole world.
+
+Every bot begins each storage visit at the configured `(start_x,start_y)` — default `(2,21)` — scanning right, then upward when the row is full. The former second-part offset into row 11 was removed. Drop validation rejects occupied standing tiles, entry-arrival neighborhoods and nearby door/portal tiles, and checks both exact coordinates and `isInTile` immediately before sending. These are safeguards against door-position drops; the cause of any particular live drop still requires live verification. `tests/harvest_storage.lua` covers the full scan and drop-site regressions.
