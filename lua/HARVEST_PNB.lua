@@ -104,14 +104,35 @@ try {
  $headers=@{Authorization=('Bearer '+$config.token)}
  while ($null -ne ($line=[Console]::In.ReadLine())) {
   if (-not $line) {continue}
-  try {Invoke-WebRequest -UseBasicParsing -Uri $uri -Method Post -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($line)) -TimeoutSec 5 | Out-Null} catch {}
+  $result='transport_error'
+  try {
+   $response=Invoke-WebRequest -UseBasicParsing -Uri $uri -Method Post -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($line)) -TimeoutSec 5
+   $result='HTTP '+[int]$response.StatusCode
+  } catch {
+   if ($_.Exception.Response) {$result='HTTP '+[int]$_.Exception.Response.StatusCode}
+   elseif ($_.Exception.Status) {$result='transport_'+[string]$_.Exception.Status}
+  }
+  if ($config.ack) {try {[IO.File]::WriteAllText([string]$config.ack,$result,[Text.Encoding]::ASCII)} catch {}}
  }
 } catch {exit 1}
 ]]
+local senderStatusPath=nil;local lastSenderStatus=nil
 local sender=nil;local nextHeartbeat=0;local retryReportAt=0;local storagePending=false;local lastSignature=nil;local sequence=0
 local session=tostring(os.time())..'-'..tostring(bot.index)..'-'..tostring(math.random(100000,999999))
 local function safeValue(fn) local ok,v=pcall(fn);if ok then return v end end
 publishStats=function(reason)
+ if senderStatusPath then
+  pcall(function()
+   local f=io.open(senderStatusPath,"rb")
+   if f then
+    local status=f:read("*a");f:close()
+    if status~="" and status~=lastSenderStatus then
+     lastSenderStatus=status
+     bot:getLog():append("[FarmStats] "..status)
+    end
+   end
+  end)
+ end
  if reason=="storage_complete" then storagePending=true end
  if os.time()<retryReportAt then return end
  if not MONITOR.enabled or MONITOR.url=="" or MONITOR.token=="" or telemetry.suppress then return end
@@ -123,7 +144,10 @@ publishStats=function(reason)
    local encoded=base64(senderCode:gsub('.',function(c)return c..'\0' end))
    sender=assert(io.popen('powershell -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand '..encoded,'w'),'stats sender unavailable')
    sender:setvbuf('no')
-   assert(sender:write(jsonEncode({url=MONITOR.url,token=MONITOR.token})..'\n'));assert(sender:flush())
+   local temp=safeValue(function()return os.getenv("TEMP")end) or "."
+   senderStatusPath=temp.."/farm-monitor-"..session..".status"
+   assert(sender:write(jsonEncode({url=MONITOR.url,token=MONITOR.token,ack=senderStatusPath})..'\n'));assert(sender:flush())
+   bot:getLog():append("[FarmStats] sender started; awaiting HTTP receipt")
   end
   local currentWorld=worldName() or 'EXIT'
   local online=bot.status==BotStatus.online and currentWorld~='EXIT'
@@ -575,6 +599,11 @@ local function waitFollowerDone(world)
   if worldOfBot(follower)~=world and kind~="DONE" then break end -- the follower is not in this world (offline, elsewhere): do not wait for it
   eventWait(1)
  end
+end
+if MONITOR.enabled and MONITOR.url~="" and MONITOR.token~="" then
+ say("[FarmStats] telemetry enabled; sending action changes")
+else
+ say("[FarmStats] telemetry disabled: set MONITOR.enabled, url and token")
 end
 assert(#FARMS>0,"the world list is empty")
 say("pair "..pair..", part "..part.." ("..(part==1 and "leader: claims worlds" or "follower: follows the leader's claim").."), "..#FARMS.." world(s) in the shared list")
