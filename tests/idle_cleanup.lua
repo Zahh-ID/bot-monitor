@@ -34,7 +34,7 @@ function bot:connect()connects=connects+1;self.status=1 end
 function bot:warp(w,id)self.world=w end
 ]=]
 local idleChecks=[=[
-leaveAndIdle();assert(count(107)==0 and count(999)==0 and #drops==2)
+leaveAndIdle(true);assert(count(107)==0 and count(999)==0 and #drops==2)
 assert(telemetry.counters.seeds_deposited==1 and events[1]=="storage_complete")
 assert(bot.world=="EXIT" and bot.status==0 and not bot.auto_reconnect and expect==nil)
 for i=1,20 do eventWait(1)end
@@ -42,6 +42,11 @@ assert(connects==0 and disconnects==1,"idle wait reconnects or spams disconnect"
 ]=]
 local assignedChecks=[=[
 assert(enter("FARM02","DOOR"));assert(connects==1 and bot.world=="FARM02" and not idleDisconnected)
+inventory[107]=1;inventory[999]=2
+function bot:leaveWorld()self.world="EXIT"end
+function bot:disconnect()self.status=0 end
+local previousDrops=#drops
+leaveAndIdle(false);assert(#drops==previousDrops and count(107)==1 and count(999)==2,"startup unexpectedly stored inventory")
 return "Idle cleanup passed: final singleton and extra item stored, leave before disconnect, no idle connects, reconnect only on assignment"
 ]=]
 return assert(load(fixture..s:sub(a,b-1)..idleChecks..s:sub(c,d-1)..assignedChecks,"idle-cleanup-test"))()

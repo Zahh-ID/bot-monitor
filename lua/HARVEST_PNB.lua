@@ -436,10 +436,10 @@ maintainIdle=function()
   bot:disconnect();idleDisconnectAt=os.time()+5
  end
 end
-local function leaveAndIdle()
+local function leaveAndIdle(cleanupInventory)
  if idleDisconnected then maintainIdle();return end
  -- Never disconnect with leftover inventory, including a single seed.
- if firstInventoryItem() then storeSeeds(telemetry.farm or worldName() or "EXIT",true) end
+ if cleanupInventory and firstInventoryItem() then storeSeeds(telemetry.farm or worldName() or "EXIT",true) end
  setCollect(false);bot.auto_reconnect=false;expect=nil
  local nextLeave=0
  while bot.status==BotStatus.online and worldName() and worldName()~="EXIT" do
@@ -448,7 +448,7 @@ local function leaveAndIdle()
  end
  idleDisconnected=true;maintainIdle()
  telemetry.phase="idle";telemetry.farm=nil
- say("inventory empty; left world and disconnected until assigned")
+ say(cleanupInventory and "inventory empty; left world and disconnected until assigned" or "unassigned; left world and disconnected until assigned")
  if publishStats then publishStats() end
 end
 
@@ -603,7 +603,7 @@ local function farmWorld(world)
  telemetry.counters.worlds_completed=telemetry.counters.worlds_completed+1;telemetry.phase="waiting"
  say(world..": finished ("..finalTotal.." trees standing, "..#finalReady.." ready)")
  if publishStats then publishStats("farm_finished") end
- leaveAndIdle()
+ leaveAndIdle(true)
 end
 
 -- ---------- claim board: one shared list, never more than one pair on a farm ----------
