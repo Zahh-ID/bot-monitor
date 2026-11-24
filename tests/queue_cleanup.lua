@@ -3,7 +3,7 @@ local a=assert(s:find("local function farmWorld(world)",1,true));local b=assert(
 local c=assert(s:find("local function followerWait()",b,true));local d=assert(s:find("local function waitFollowerDone",c,true))
 local fixture=[=[
 local telemetry={scans={},counters={worlds_completed=0}};local lastTreeTotal;local seedCount=44;local SEED_ID=107;local BLOCK_ID=106;local SEED_LIMIT=100;local BLOCK_LIMIT=180;local FARM_DOOR="DOOR"
-local bot={index=2};local pair=1;local lastDone="FARM01";local stores=0;local cleanups=0;local leaves=0;local tick=0
+local bot={index=2};local part=2;local PARTS=2;local pair=1;local lastDone="FARM01";local stores=0;local cleanups=0;local leaves=0;local tick=0
 local leader={custom_status="CLAIM|1|FARM02"}
 local function count(id)return id==SEED_ID and seedCount or 0 end
 local function enter()return true end
