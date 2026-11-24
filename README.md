@@ -50,3 +50,9 @@ Import this repository as the Vercel project root (the repository root), using t
 Harvest reads every coordinate from `(0,0)` through `(world.x-1,world.y-1)` using live `getTile`, retries incomplete tile data, and logs the checked tile count. Nonempty but partial `getTilesSafe` snapshots are no longer trusted as the whole world.
 
 Every bot begins each storage visit at the configured `(start_x,start_y)` — default `(2,21)` — scanning right, then upward when the row is full. The former second-part offset into row 11 was removed. Drop validation rejects occupied standing tiles, entry-arrival neighborhoods and nearby door/portal tiles, and checks both exact coordinates and `isInTile` immediately before sending. These are safeguards against door-position drops; the cause of any particular live drop still requires live verification. `tests/harvest_storage.lua` covers the full scan and drop-site regressions.
+
+## Older Windows TLS fallback
+
+If the log shows `transport_SecureChannelFailure`, install a portable non-Schannel curl build from https://curl.se/windows/. Extract the package contents so the executable is `C:\curl\bin\curl.exe`, retaining the accompanying certificate bundle. The sender prefers that executable, then curl.exe on PATH, otherwise uses PowerShell's HTTPS client. Optionally set `MONITOR.curl_path` to another executable path. No PATH edit is required for the default location.
+
+Reload the updated Lua file. A successful curl report logs `[FarmStats] HTTP 200 (curl)`. A `curl_exit_N` reports curl's exit code. TLS certificate verification stays enabled. URL, authorization header and JSON payload are supplied over curl's standard input, not process arguments. No changes to Schannel settings or registry are made. Portable curl HTTPS delivery was tested against the public monitor endpoint; Windows Server 2012 R2 operation still needs verification on the actual server.

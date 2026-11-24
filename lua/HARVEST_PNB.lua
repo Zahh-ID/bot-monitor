@@ -95,19 +95,46 @@ end
 local senderCode=[[
 $ErrorActionPreference='Stop'
 [Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12
-[Console]::InputEncoding=[Text.Encoding]::UTF8
+[Console]::InputEncoding=New-Object System.Text.UTF8Encoding -ArgumentList $false
 try {
  $configLine=[Console]::In.ReadLine()
  $config=$configLine|ConvertFrom-Json
  $uri=[Uri]$config.url
  if ($uri.Scheme -notin @('https','http')) {exit 1}
  $headers=@{Authorization=('Bearer '+$config.token)}
+ $curlPath=$null
+ if ($config.curl_path -and (Test-Path -LiteralPath $config.curl_path)) {$curlPath=[string]$config.curl_path}
+ if (-not $curlPath) {$curlCommand=Get-Command curl.exe -CommandType Application -ErrorAction SilentlyContinue;if ($curlCommand) {$curlPath=$curlCommand.Definition}}
+ function CurlQuote([string]$value) {return '"'+$value.Replace('\','\\').Replace('"','\"').Replace("`r",'\r').Replace("`n",'\n')+'"'}
+ function SendCurl([string]$payload) {
+  $info=New-Object Diagnostics.ProcessStartInfo
+  $info.FileName=$curlPath
+  $info.Arguments='--config - --silent --show-error --output NUL --write-out %{http_code} --connect-timeout 5 --max-time 12'
+  $info.UseShellExecute=$false;$info.CreateNoWindow=$true
+  $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
+  $process=New-Object Diagnostics.Process
+  $process.StartInfo=$info
+  try {
+   [void]$process.Start()
+   $curlLines=@(('url = '+(CurlQuote $config.url)),'request = "POST"',('header = '+(CurlQuote ('Authorization: Bearer '+$config.token))),'header = "Content-Type: application/json; charset=utf-8"',('data-binary = '+(CurlQuote $payload)))
+   $curlBytes=[Text.Encoding]::UTF8.GetBytes(($curlLines -join "`n")+"`n")
+   $process.StandardInput.BaseStream.Write($curlBytes,0,$curlBytes.Length)
+   $process.StandardInput.BaseStream.Close()
+   $http=$process.StandardOutput.ReadToEnd().Trim();$discard=$process.StandardError.ReadToEnd()
+   $process.WaitForExit()
+   if ($process.ExitCode -eq 0 -and $http -match '^\d{3}$') {return 'HTTP '+$http+' (curl)'}
+   return 'curl_exit_'+$process.ExitCode
+  } finally {$process.Dispose()}
+ }
  while ($null -ne ($line=[Console]::In.ReadLine())) {
   if (-not $line) {continue}
   $result='transport_error'
   try {
+   if ($curlPath) {$result=SendCurl $line}
+   else {
    $response=Invoke-WebRequest -UseBasicParsing -Uri $uri -Method Post -Headers $headers -ContentType 'application/json; charset=utf-8' -Body ([Text.Encoding]::UTF8.GetBytes($line)) -TimeoutSec 5
    $result='HTTP '+[int]$response.StatusCode
+   }
   } catch {
    if ($_.Exception.Response) {$result='HTTP '+[int]$_.Exception.Response.StatusCode}
    elseif ($_.Exception.Status) {$result='transport_'+[string]$_.Exception.Status}
@@ -146,7 +173,7 @@ publishStats=function(reason)
    sender:setvbuf('no')
    local temp=safeValue(function()return os.getenv("TEMP")end) or "."
    senderStatusPath=temp.."/farm-monitor-"..session..".status"
-   assert(sender:write(jsonEncode({url=MONITOR.url,token=MONITOR.token,ack=senderStatusPath})..'\n'));assert(sender:flush())
+   assert(sender:write(jsonEncode({url=MONITOR.url,token=MONITOR.token,ack=senderStatusPath,curl_path=MONITOR.curl_path or "C:/curl/bin/curl.exe"})..'\n'));assert(sender:flush())
    bot:getLog():append("[FarmStats] sender started; awaiting HTTP receipt")
   end
   local currentWorld=worldName() or 'EXIT'
