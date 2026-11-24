@@ -56,3 +56,10 @@ Every bot begins each storage visit at the configured `(start_x,start_y)` — de
 If the log shows `transport_SecureChannelFailure`, install a portable non-Schannel curl build from https://curl.se/windows/. Extract the package contents so the executable is `C:\curl\bin\curl.exe`, retaining the accompanying certificate bundle. The sender prefers that executable, then curl.exe on PATH, otherwise uses PowerShell's HTTPS client. Optionally set `MONITOR.curl_path` to another executable path. No PATH edit is required for the default location.
 
 Reload the updated Lua file. A successful curl report logs `[FarmStats] HTTP 200 (curl)`. A `curl_exit_N` reports curl's exit code. TLS certificate verification stays enabled. URL, authorization header and JSON payload are supplied over curl's standard input, not process arguments. No changes to Schannel settings or registry are made. Portable curl HTTPS delivery was tested against the public monitor endpoint; Windows Server 2012 R2 operation still needs verification on the actual server.
+
+
+## Farm completion and live bot visibility
+
+Each farm shows capacity 2,645 and harvest progress `(2645 - standing target trees) / 2645`, clamped to 0..100%. This is cleared capacity, not a count of server-confirmed harvest actions. Zero standing target trees shows Harvest done; PNB/storage may still be running. A script pass finishing with trees remaining never forces the percentage to 100%. The Lua sender does a final full scan and emits `farm_finished` once when its farm pass finishes. Existing scans also receive progress calculations without waiting for a new Lua version.
+
+Stale bot rows are omitted from the live API list and dashboard. Their stored reports/history and the latest farm/storage observations remain retained. A new report brings a bot back automatically. This hides stale reports; it does not delete database history or remove game accounts.

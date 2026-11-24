@@ -544,8 +544,13 @@ local function farmWorld(world)
   if count(SEED_ID)>=SEED_LIMIT then storeSeeds(world) end
   if readyCount==0 and count(BLOCK_ID)==0 then break end -- nothing ready, no block left: this world is finished
  end
+ local finalReady,finalTotal=treesToDo()
+ telemetry.scan={world=world,observed_at=os.time(),trees=finalTotal,ready=#finalReady,finished=true}
+ telemetry.scans[world]=telemetry.scan
+ lastTreeTotal=finalTotal
  telemetry.counters.worlds_completed=telemetry.counters.worlds_completed+1;telemetry.phase="waiting"
- say(world..": finished"..(lastTreeTotal and lastTreeTotal>0 and (" ("..lastTreeTotal.." tree(s) still standing, none ready now)") or ""))
+ say(world..": finished ("..finalTotal.." trees standing, "..#finalReady.." ready)")
+ if publishStats then publishStats("farm_finished") end
 end
 
 -- ---------- claim board: one shared list, never more than one pair on a farm ----------
