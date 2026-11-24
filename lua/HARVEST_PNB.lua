@@ -341,17 +341,13 @@ local function validDropSite(x,y)
  end end
  return true
 end
-local function firstInventoryItem()
- for _,item in ipairs(assert(nativeList(bot:getInventory():getItems()),"inventory list unavailable")) do
-  if item.id>0 and item.count>0 then return item.id end
- end
-end
-local function dropSeedAt(x,y,itemId)
- local id=itemId or SEED_ID
+local function dropSeedAt(x,y)
+ local id=SEED_ID
  if not validDropSite(x,y) then return false end
  while count(id)>0 do
   guard()
   if not walkTo(x-1,y) then return false end
+  setCollect(false);bot:setDirection(false)
   nap(nativeMs("drop"))
   -- nap may reconnect/rejoin. Never trust the pre-delay position.
   if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and bot:isInTile(x-1,y) and bot.x==x-1 and bot.y==y and validDropSite(x,y) then
@@ -363,11 +359,23 @@ local function dropSeedAt(x,y,itemId)
    if not target or target.fg~=0 or stacks>=MAX_STACKS or total>=MAX_ITEMS then return false end
    local before=count(id);local amount=math.min(before,MAX_ITEMS-total)
    if amount<=0 then return false end
-   setCollect(false);bot:setDirection(false)
-   -- No yield between final world/position validation and sending the drop.
+   -- Facing has settled; no yield between final validation and the drop.
    if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and bot:isInTile(x-1,y) and bot.x==x-1 and bot.y==y and validDropSite(x,y) then
+    say("dropping Toilet Seed ("..id..") x"..amount.." at "..x..","..y)
     bot:drop(id,amount)
-    return true,before
+    local nextPendingLog=os.time()+10
+    while true do
+     guard()
+     if readyForActions() and bot:isInWorld(STORAGE.world) and not onWhiteDoor() and count(id)<before then
+      say("Toilet Seed drop confirmed; carrying "..count(id))
+      return true,before
+     end
+     if os.time()>=nextPendingLog then
+      nextPendingLog=os.time()+30
+      say("Toilet Seed drop pending; waiting, not moving to another tile or resending")
+     end
+     nap(math.max(100,nativeMs("drop")))
+    end
    end
   end
   say("drop position changed; repositioning at "..(x-1)..","..y.." before dropping")
@@ -387,9 +395,8 @@ local function storeSeeds(farmWorld,finishOnly)
  local lastReported=""
  while true do
   guard()
-  local itemId
-  if finishOnly then itemId=firstInventoryItem() elseif count(SEED_ID)>0 then itemId=SEED_ID end
-  if not itemId then break end
+  if count(SEED_ID)<=0 then break end
+  local itemId=SEED_ID
   -- what lies on each tile NOW (read again before every drop; the other bot drops here too)
   local used={}
   for _,o in ipairs(assert(nativeList(bot:getWorld():getObjects()),"dropped object list unavailable")) do
@@ -405,7 +412,7 @@ local function storeSeeds(farmWorld,finishOnly)
    local occ=used[x..":"..y] or {stacks=0,total=0}
    local t=tileAt(x,y)
    if t and validDropSite(x,y) and occ.stacks<MAX_STACKS and occ.total<MAX_ITEMS then
-    local sent,before=dropSeedAt(x,y,itemId)
+    local sent,before=dropSeedAt(x,y)
     if sent then
      nap(nativeMs("drop"))
      if count(itemId)<before then if itemId==SEED_ID then telemetry.counters.seeds_deposited=telemetry.counters.seeds_deposited+(before-count(itemId)) end;dropped=true;startAt=idx;break end
@@ -421,7 +428,7 @@ local function storeSeeds(farmWorld,finishOnly)
  telemetry.phase="storage_complete";telemetry.suppress=false
  if publishStats then publishStats("storage_complete") end
  if finishOnly then
-  say("final storage complete: no carried inventory items")
+  say("final storage complete: no Toilet Seeds carried")
  else
   say("seeds dropped; back to "..farmWorld)
   enter(farmWorld,FARM_DOOR)
@@ -446,12 +453,12 @@ local function leaveCurrentWorld()
 end
 local function leaveAndIdle(cleanupInventory)
  if idleDisconnected then maintainIdle();return end
- if cleanupInventory and firstInventoryItem() then storeSeeds(telemetry.farm or worldName() or "EXIT",true) end
+ if cleanupInventory and count(SEED_ID)>0 then storeSeeds(telemetry.farm or worldName() or "EXIT",true) end
  bot.auto_reconnect=false
  leaveCurrentWorld()
  idleDisconnected=true;maintainIdle()
  telemetry.phase="idle";telemetry.farm=nil
- say(cleanupInventory and "inventory empty; no assignment available; disconnected" or "unassigned; disconnected until assigned")
+ say(cleanupInventory and "Toilet Seeds stored; no assignment available; disconnected" or "unassigned; disconnected until assigned")
  if publishStats then publishStats() end
 end
 

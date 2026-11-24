@@ -28,13 +28,13 @@ function bot:isInWorld(w)return self.world==w end
 function bot:isInTile(x,y)return self.x==x and self.y==y end
 function bot:setDirection()end
 function bot:drop(id,n)assert(self.world=="STORE" and self:isInTile(1,21));drops[#drops+1]=id;inventory[id]=inventory[id]-n end
-function bot:leaveWorld()assert(not next(inventory) or (count(107)==0 and count(999)==0));self.world="EXIT"end
-function bot:disconnect()assert(count(107)==0 and count(999)==0);self.status=0;disconnects=disconnects+1 end
+function bot:leaveWorld()assert(not next(inventory) or (count(107)==0 and count(999)==2));self.world="EXIT"end
+function bot:disconnect()assert(count(107)==0 and count(999)==2);self.status=0;disconnects=disconnects+1 end
 function bot:connect()connects=connects+1;self.status=1 end
 function bot:warp(w,id)self.world=w end
 ]=]
 local idleChecks=[=[
-leaveAndIdle(true);assert(count(107)==0 and count(999)==0 and #drops==2)
+leaveAndIdle(true);assert(count(107)==0 and count(999)==2 and #drops==1)
 assert(telemetry.counters.seeds_deposited==1 and events[1]=="storage_complete")
 assert(bot.world=="EXIT" and bot.status==0 and not bot.auto_reconnect and expect==nil)
 for i=1,20 do eventWait(1)end
@@ -47,6 +47,6 @@ function bot:leaveWorld()self.world="EXIT"end
 function bot:disconnect()self.status=0 end
 local previousDrops=#drops
 leaveAndIdle(false);assert(#drops==previousDrops and count(107)==1 and count(999)==2,"startup unexpectedly stored inventory")
-return "Idle cleanup passed: final singleton and extra item stored, leave before disconnect, no idle connects, reconnect only on assignment"
+return "Idle cleanup passed: final Toilet singleton stored, unrelated item preserved, leave before disconnect, no idle connects, reconnect only on assignment"
 ]=]
 return assert(load(fixture..s:sub(a,b-1)..idleChecks..s:sub(c,d-1)..assignedChecks,"idle-cleanup-test"))()
