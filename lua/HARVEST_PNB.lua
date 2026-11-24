@@ -109,7 +109,7 @@ try {
  function SendCurl([string]$payload) {
   $info=New-Object Diagnostics.ProcessStartInfo
   $info.FileName=$curlPath
-  $info.Arguments='--config - --silent --show-error --output NUL --write-out %{http_code} --connect-timeout 5 --max-time 12'
+  $info.Arguments='--config - --silent --show-error --write-out \n%{http_code} --max-filesize 16384 --connect-timeout 5 --max-time 12'
   $info.UseShellExecute=$false;$info.CreateNoWindow=$true
   $info.RedirectStandardInput=$true;$info.RedirectStandardOutput=$true;$info.RedirectStandardError=$true
   $process=New-Object Diagnostics.Process
@@ -120,9 +120,21 @@ try {
    $curlBytes=[Text.Encoding]::UTF8.GetBytes(($curlLines -join "`n")+"`n")
    $process.StandardInput.BaseStream.Write($curlBytes,0,$curlBytes.Length)
    $process.StandardInput.BaseStream.Close()
-   $http=$process.StandardOutput.ReadToEnd().Trim();$discard=$process.StandardError.ReadToEnd()
+   $output=$process.StandardOutput.ReadToEnd();$discard=$process.StandardError.ReadToEnd()
    $process.WaitForExit()
-   if ($process.ExitCode -eq 0 -and $http -match '^\d{3}$') {return 'HTTP '+$http+' (curl)'}
+   $split=$output.LastIndexOf("`n");$http='';$body=''
+   if ($split -ge 0) {$http=$output.Substring($split+1).Trim();$body=$output.Substring(0,$split)}
+   if ($process.ExitCode -eq 0 -and $http -match '^\d{3}$') {
+    $answer='HTTP '+$http+' (curl)'
+    if ([int]$http -ge 400) {
+     try {
+      $detail=$body|ConvertFrom-Json
+      if ($detail.reason -match '^(Invalid [A-Za-z ]+|Too many farms)$') {$answer+=': '+$detail.reason}
+      if ($detail.reason -eq 'Invalid timestamp') {$answer+='; check server date/time'}
+     } catch {}
+    }
+    return $answer
+   }
    return 'curl_exit_'+$process.ExitCode
   } finally {$process.Dispose()}
  }
@@ -168,8 +180,10 @@ publishStats=function(reason)
  if not storagePending and signature==lastSignature and (heartbeat<=0 or os.time()<nextHeartbeat) then return end
  local ok,err=pcall(function()
   if not sender then
-   local encoded=base64(senderCode:gsub('.',function(c)return c..'\0' end))
-   sender=assert(io.popen('powershell -NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand '..encoded,'w'),'stats sender unavailable')
+   local encoded=base64(senderCode)
+   -- UTF-8 wrapper keeps the command below cmd.exe's 8191-character limit.
+   local command=[[powershell -NoProfile -NonInteractive -WindowStyle Hidden -Command "& ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String(']]..encoded..[['))))"]]
+   sender=assert(io.popen(command,'w'),'stats sender unavailable')
    sender:setvbuf('no')
    local temp=safeValue(function()return os.getenv("TEMP")end) or "."
    senderStatusPath=temp.."/farm-monitor-"..session..".status"

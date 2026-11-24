@@ -8,6 +8,10 @@ export async function POST(request){
   while(true){const{done,value}=await reader.read();if(done)break;size+=value.length;if(size>1048576){await reader.cancel();return Response.json({error:'Batch too large'},{status:413});}chunks.push(Buffer.from(value));}
   rows=JSON.parse(Buffer.concat(chunks).toString('utf8')).snapshots;
   if(!Array.isArray(rows)||rows.length<1||rows.length>100)throw Error('Invalid batch');rows.forEach(r=>validate(r));
- }catch{return Response.json({error:'Invalid snapshot batch'},{status:400});}
+ }catch(error){
+  const message=error instanceof Error?error.message:'';
+  const reason=/^(Invalid [A-Za-z ]+|Too many farms)$/.test(message)?message:'Invalid snapshot batch';
+  return Response.json({error:'Invalid snapshot batch',reason,server_time:Math.floor(Date.now()/1000)},{status:400});
+ }
  try{return Response.json(await(await getStore()).ingest(rows));}catch{return Response.json({error:'Database unavailable; retry the next report'},{status:503});}
 }
